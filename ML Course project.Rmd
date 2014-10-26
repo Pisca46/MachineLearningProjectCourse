@@ -1,0 +1,111 @@
+---
+title: "ML course project"
+author: "Jan Vis"
+date: "26 October 2014"
+output: html_document
+---
+```{r, echo=FALSE, message=FALSE}
+library (ggplot2)
+library (grid)
+library (gridExtra)
+library (lattice)
+library (caret)
+library (randomForest)
+```
+<p><br></p>
+####Introduction
+New devices made it possible to collect a large amount of data about ones personal activity relatively inexpensively. In this project we are dealing with weight lifting data. The goal is to use data from
+accelerometers on the belt, forearm, arm, and dumbbell of 6 participants and predict the quality of the exercises. For additional details see [1].
+<p><br></p>
+####Exploratory analysis 1: A two in one data set
+```{r, echo=FALSE}
+train_test  <- read.csv("pml-training.csv", na.strings = c('NA','#DIV/0!',''))
+validation  <- read.csv("pml-testing.csv" , na.strings = c('NA','#DIV/0!',''))
+```
+At a first glance it seems that the data contains a lot of 'NA' values. Looking to the data in a spreadsheet application reveals a large number of columns that only contain data in the row for which the column "new_window" contains the value "yes". It seems these columns contain summarizing data as indicated in [1] section 5.1 and by the names of these columns (starting with e.g. max, avg, var etc.).
+
+As, for some row with 'new_window' equals 'yes', the data in these columns is not pertinent to the sample data in that row (but a summary of data in other rows), it should not be used for a building a prediction model. So we remove these columns.
+```{r}
+noRows  <- which(train_test$new_window == 'no')    # rows with new_window == 'no'
+yesCols <- which (is.na (train_test[noRows[1],]) ) # columns with NA if new_window == 'no'
+train_testRaw <- train_test[,-yesCols]             # Raw, i.e. excl. the summary data
+length(yesCols)
+```
+<p><br></p>
+####Exploratory analysis 2:  Other redundant columns
+Looking to columns, the first 7 are named:
+```{r}
+colnames(train_testRaw)[1:7]
+```
+As we want to predict the quality of weight lifting based on sensor information, we do not want to make our model dependent on the administrative data like a row number (X), the name of the performer (user_name), time stamps (raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp), new_window (now always 'no') and a window numbering (num_window).
+
+As the most striking example take column 'X', which contains a row number. However, as the 'classe' column is also ordered, the value of X would be a perfect predictor in a training set. (see figure 1 and 2). However X would perform less then perfect for a validation set which has its own row numbered.
+```{r, fig.height=4, fig.width=12}
+cl <- train_testRaw$classe
+df <- data.frame (X = train_testRaw$X, classe=cl, index=seq (1,length (cl)))
+plot1 <- qplot (index, classe, data=df, main="Figure 1\nThe values of classe")
+plot2 <- qplot (X, classe, , data=df, main = "Figure 2\nA seemingly 'perfect' predictor")
+grid.arrange(plot1, plot2, ncol = 2, main = "Exploratory analysis")
+```
+So we remove these first 7 columns.
+```{r}
+train_testRaw <- train_testRaw[,-c(1:7)]
+````
+Figures 1 shows also that each value of classe is supported with roughly the same number of samples. So, in this respect, we may expect similar performance characteristics for each classe value.
+<p><br></p>
+####Splitting Data into Training and testing for validation
+Before starting to train we need to spit the train_testRaw data into a training set and a test set in order to facilitate validation. I put 75% of the samples int the training set.
+```{r}
+set.seed (12345678)
+index_train <- createDataPartition(y=train_testRaw$classe, p=0.75, list=FALSE)
+training <- train_testRaw[index_train,]
+testing  <- train_testRaw[-index_train,]
+dim(training); dim(testing)
+```
+<p><br></p>
+####Train a candidate model
+Now we are ready to train on our training set. The method chosen is 'random forrest'.
+As there are no reasons to assume linearity, a tree model is a good candidate and, within the tree models, random forest is known for its accuracy.
+```{r}
+    fm <- randomForest (classe~., data=training)
+    vi <- importance (fm)[,1]
+    vis <- sort(vi, decreasing = TRUE, index.return=TRUE)
+    cat ("The twelve most important columns are:",vis$ix[1:12],"\n")
+```
+<p><br></p>
+####Test the model against the testing data
+The prove of the pudding. How well does the model perform when validated against the test data in testing?
+```{r}
+predictionTesting <- predict(fm,testing)
+cmTesting     <- confusionMatrix(predictionTesting, testing$classe)
+```
+As shown in figure 3 below, the prediction is quite accurate. Only 17 out of sample errors on 4904 samples, i.e. <b>the out of sample error rate for this test set equals .347 % and the accuracy is 99.653 %.</b>
+```{r, fig.height=4, fig.width=6}
+# some (primitive?) code to plot the error as reported in cmTesting
+# The data is reaggenged to comply with a qplot statement I know
+err <- cmTesting$table
+d <- dim(err)[1]
+for (i in 1:d) err[i,i]<-0
+perError <- matrix (nrow = sum(err), ncol=2)
+colnames (perError) <- c('Predicted classe', 'Actual classe')
+classeNames <- c('A', 'B', 'C', 'D', 'E')
+n <- 1
+for (i in 1:d) for (j in 1:d) if (err[i,j]>0) for (k in 1:err[i,j]) {
+    perError [n,1] <- i ; perError[n,2] <- classeNames[j]; n <- n+1
+}
+df <- data.frame (PredictedClasse=perError[,1], ActualClasse=perError[,2])
+qplot(ActualClasse, data=df, fill=PredictedClasse, geom="bar",
+      main = 'Figure 3\nNumber of errors for 4903 test samples',
+      ylab = 'Number of predicted classe errors',
+      xlab = 'Actual classe')
+```
+<p><br></p>
+For more details the confusion matrix data is provided below.
+```{r}
+cmTesting
+```
+<p><br></p>
+####Literature
+[1] Eduardo Velloso e.a. Qualitative Activity Recognition of Weight Lifting Exercises
+    AH'13 4th Augmented Human International Conference, Stuttgart, Germany — March 07-08, 2013
+    Available at http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201
